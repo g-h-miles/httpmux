@@ -92,7 +92,7 @@ mux := http.NewServeMux()
 mux.HandleFunc("/users/{id}", userHandler)
 
 // After (HttpMux)
-router := httpmux.New()
+router := httpmux.NewServeMux()
 router.HandleFunc("GET", "/users/{id}", userHandler)  // Just add the method!
 ```
 
@@ -120,7 +120,7 @@ router.GET("/users/{id}", userHandler)  // Standard wildcard syntax
 
 ```go
 // Create new router
-router := httpmux.New()
+router := httpmux.NewServeMux() // or httpmux.New()
 
 // Register handlers
 router.Handle(method, path, handler)           // http.Handler
