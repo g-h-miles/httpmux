@@ -1,6 +1,11 @@
 BSD 3-Clause License
 
+Original httprouter work:
 Copyright (c) 2013, Julien Schmidt
+
+HttpMux modifications and enhancements:
+Copyright (c) 2025, Graham Miles
+
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without

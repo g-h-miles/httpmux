@@ -2,34 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be found
 // in the LICENSE file.
 
-// Package httprouter is a trie based high performance HTTP request router.
+// Package httpmux is a high-performance HTTP request router that combines
+// the speed of httprouter with full compatibility with Go's standard net/http patterns.
 //
 // A trivial example is:
 //
-//  package main
+//	package main
 //
-//  import (
-//      "fmt"
-//      "github.com/julienschmidt/httprouter"
-//      "net/http"
-//      "log"
-//  )
+//	import (
+//	    "fmt"
+//	    "github.com/g-h-miles/httpmux"
+//	    "net/http"
+//	    "log"
+//	)
 //
-//  func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-//      fmt.Fprint(w, "Welcome!\n")
-//  }
+//	func Index(w http.ResponseWriter, r *http.Request) {
+//	    fmt.Fprint(w, "Welcome!\n")
+//	}
 //
-//  func Hello(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-//      fmt.Fprintf(w, "hello, %s!\n", ps.ByName("name"))
-//  }
+//	func Hello(w http.ResponseWriter, r *http.Request) {
+//	    name := r.PathValue("name")
+//	    fmt.Fprintf(w, "hello, %s!\n", name)
+//	}
 //
-//  func main() {
-//      router := httprouter.New()
-//      router.GET("/", Index)
-//      router.GET("/hello/:name", Hello)
+//	func main() {
+//	    router := httpmux.NewServeMux()
+//	    router.GET("/", Index)
+//	    router.GET("/hello/{name}", Hello)
 //
-//      log.Fatal(http.ListenAndServe(":8080", router))
-//  }
+//	    log.Fatal(http.ListenAndServe(":8080", router))
+//	}
 //
 // The router matches incoming requests by the request method and the path.
 // If a handle is registered for this path and method, the router delegates the
@@ -39,88 +41,46 @@
 //
 // The registered path, against which the router matches incoming requests, can
 // contain two types of parameters:
-//  Syntax    Type
-//  :name     named parameter
-//  *name     catch-all parameter
+//
+//	Syntax    Type
+//	{name}     named parameter
+//	{name...}  catch-all parameter
 //
 // Named parameters are dynamic path segments. They match anything until the
 // next '/' or the path end:
-//  Path: /blog/:category/:post
 //
-//  Requests:
-//   /blog/go/request-routers            match: category="go", post="request-routers"
-//   /blog/go/request-routers/           no match, but the router would redirect
-//   /blog/go/                           no match
-//   /blog/go/request-routers/comments   no match
+//	Path: /blog/{category}/{post}
+//
+//	Requests:
+//	 /blog/go/request-routers            match: category="go", post="request-routers"
+//	 /blog/go/request-routers/           no match, but the router would redirect
+//	 /blog/go/                           no match
+//	 /blog/go/request-routers/comments   no match
 //
 // Catch-all parameters match anything until the path end, including the
 // directory index (the '/' before the catch-all). Since they match anything
 // until the end, catch-all parameters must always be the final path element.
-//  Path: /files/*filepath
 //
-//  Requests:
-//   /files/                             match: filepath="/"
-//   /files/LICENSE                      match: filepath="/LICENSE"
-//   /files/templates/article.html       match: filepath="/templates/article.html"
-//   /files                              no match, but the router would redirect
+//	Path: /files/{filepath...}
 //
-// The value of parameters is saved as a slice of the Param struct, consisting
-// each of a key and a value. The slice is passed to the Handle func as a third
-// parameter.
-// There are two ways to retrieve the value of a parameter:
-//  // by the name of the parameter
-//  user := ps.ByName("user") // defined by :user or *user
+//	Requests:
+//	 /files/                             match: filepath="/"
+//	 /files/LICENSE                      match: filepath="/LICENSE"
+//	 /files/templates/article.html       match: filepath="/templates/article.html"
+//	 /files                              no match, but the router would redirect
 //
-//  // by the index of the parameter. This way you can also get the name (key)
-//  thirdKey   := ps[2].Key   // the name of the 3rd parameter
-//  thirdValue := ps[2].Value // the value of the 3rd parameter
-package httprouter
+// The value of parameters is available using the standard Go 1.22+ PathValue method:
+//
+//	// Access parameter values
+//	user := r.PathValue("user")     // defined by {user} or {user...}
+//	category := r.PathValue("category")
+//	filepath := r.PathValue("filepath")
+package httpmux
 
 import (
-	"context"
 	"net/http"
 	"strings"
-	"sync"
 )
-
-// Handle is a function that can be registered to a route to handle HTTP
-// requests. Like http.HandlerFunc, but has a third parameter for the values of
-// wildcards (path variables).
-type Handle func(http.ResponseWriter, *http.Request, Params)
-
-// Param is a single URL parameter, consisting of a key and a value.
-type Param struct {
-	Key   string
-	Value string
-}
-
-// Params is a Param-slice, as returned by the router.
-// The slice is ordered, the first URL parameter is also the first slice value.
-// It is therefore safe to read values by the index.
-type Params []Param
-
-// ByName returns the value of the first Param which key matches the given name.
-// If no matching Param is found, an empty string is returned.
-func (ps Params) ByName(name string) string {
-	for _, p := range ps {
-		if p.Key == name {
-			return p.Value
-		}
-	}
-	return ""
-}
-
-type paramsKey struct{}
-
-// ParamsKey is the request context key under which URL params are stored.
-var ParamsKey = paramsKey{}
-
-// ParamsFromContext pulls the URL parameters from a request context,
-// or returns nil if none are present.
-func ParamsFromContext(ctx context.Context) Params {
-	p, _ := ctx.Value(ParamsKey).(Params)
-	return p
-}
 
 // MatchedRoutePathParam is the Param name under which the path of the matched
 // route is stored, if Router.SaveMatchedRoutePath is set.
@@ -129,8 +89,8 @@ var MatchedRoutePathParam = "$matchedRoutePath"
 // MatchedRoutePath retrieves the path of the matched route.
 // Router.SaveMatchedRoutePath must have been enabled when the respective
 // handler was added, otherwise this function always returns an empty string.
-func (ps Params) MatchedRoutePath() string {
-	return ps.ByName(MatchedRoutePathParam)
+func MatchedRoutePath(req *http.Request) string {
+	return req.PathValue(MatchedRoutePathParam)
 }
 
 // Router is a http.Handler which can be used to dispatch requests to different
@@ -138,8 +98,8 @@ func (ps Params) MatchedRoutePath() string {
 type Router struct {
 	trees map[string]*node
 
-	paramsPool sync.Pool
-	maxParams  uint16
+	// paramsPool sync.Pool
+	// maxParams  uint16
 
 	// If enabled, adds the matched route path onto the http.Request context
 	// before invoking the handler.
@@ -216,69 +176,61 @@ func New() *Router {
 		RedirectFixedPath:      true,
 		HandleMethodNotAllowed: true,
 		HandleOPTIONS:          true,
+		trees:                  make(map[string]*node),
 	}
 }
 
-func (r *Router) getParams() *Params {
-	ps, _ := r.paramsPool.Get().(*Params)
-	*ps = (*ps)[0:0] // reset slice
-	return ps
-}
-
-func (r *Router) putParams(ps *Params) {
-	if ps != nil {
-		r.paramsPool.Put(ps)
+// just an alias for New() aligning with stdlib http.ServeMux
+func NewServeMux() *Router {
+	return &Router{
+		RedirectTrailingSlash:  true,
+		RedirectFixedPath:      true,
+		HandleMethodNotAllowed: true,
+		HandleOPTIONS:          true,
+		trees:                  make(map[string]*node),
 	}
 }
 
-func (r *Router) saveMatchedRoutePath(path string, handle Handle) Handle {
-	return func(w http.ResponseWriter, req *http.Request, ps Params) {
-		if ps == nil {
-			psp := r.getParams()
-			ps = (*psp)[0:1]
-			ps[0] = Param{Key: MatchedRoutePathParam, Value: path}
-			handle(w, req, ps)
-			r.putParams(psp)
-		} else {
-			ps = append(ps, Param{Key: MatchedRoutePathParam, Value: path})
-			handle(w, req, ps)
-		}
+func (r *Router) saveMatchedRoutePath(path string, handle http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		req.SetPathValue(MatchedRoutePathParam, path)
+		handle(w, req)
 	}
 }
 
-// GET is a shortcut for router.Handle(http.MethodGet, path, handle)
-func (r *Router) GET(path string, handle Handle) {
-	r.Handle(http.MethodGet, path, handle)
+// GET is a shortcut for router.HandleFunc("GET", path, handler)
+func (r *Router) GET(path string, handle http.HandlerFunc) {
+	r.handle(http.MethodGet, path, handle)
 }
 
-// HEAD is a shortcut for router.Handle(http.MethodHead, path, handle)
-func (r *Router) HEAD(path string, handle Handle) {
-	r.Handle(http.MethodHead, path, handle)
+// HEAD is a shortcut for router.HandleFunc("HEAD", path, handler)
+func (r *Router) HEAD(path string, handle http.HandlerFunc) {
+	r.handle(http.MethodHead, path, handle)
 }
 
 // OPTIONS is a shortcut for router.Handle(http.MethodOptions, path, handle)
-func (r *Router) OPTIONS(path string, handle Handle) {
-	r.Handle(http.MethodOptions, path, handle)
+func (r *Router) OPTIONS(path string, handle http.HandlerFunc) {
+	r.handle(http.MethodOptions, path, handle)
 }
 
 // POST is a shortcut for router.Handle(http.MethodPost, path, handle)
-func (r *Router) POST(path string, handle Handle) {
-	r.Handle(http.MethodPost, path, handle)
+func (r *Router) POST(path string, handle http.HandlerFunc) {
+	r.handle(http.MethodPost, path, handle)
 }
 
 // PUT is a shortcut for router.Handle(http.MethodPut, path, handle)
-func (r *Router) PUT(path string, handle Handle) {
-	r.Handle(http.MethodPut, path, handle)
+func (r *Router) PUT(path string, handle http.HandlerFunc) {
+	r.handle(http.MethodPut, path, handle)
 }
 
 // PATCH is a shortcut for router.Handle(http.MethodPatch, path, handle)
-func (r *Router) PATCH(path string, handle Handle) {
-	r.Handle(http.MethodPatch, path, handle)
+func (r *Router) PATCH(path string, handle http.HandlerFunc) {
+	r.handle(http.MethodPatch, path, handle)
 }
 
 // DELETE is a shortcut for router.Handle(http.MethodDelete, path, handle)
-func (r *Router) DELETE(path string, handle Handle) {
-	r.Handle(http.MethodDelete, path, handle)
+func (r *Router) DELETE(path string, handle http.HandlerFunc) {
+	r.handle(http.MethodDelete, path, handle)
 }
 
 // Handle registers a new request handle with the given path and method.
@@ -289,7 +241,9 @@ func (r *Router) DELETE(path string, handle Handle) {
 // This function is intended for bulk loading and to allow the usage of less
 // frequently used, non-standardized or custom methods (e.g. for internal
 // communication with a proxy).
-func (r *Router) Handle(method, path string, handle Handle) {
+
+// Made internal because the public functions are covered by HandleFunc
+func (r *Router) handle(method, path string, handle http.HandlerFunc) {
 	varsCount := uint16(0)
 
 	if method == "" {
@@ -320,62 +274,42 @@ func (r *Router) Handle(method, path string, handle Handle) {
 	}
 
 	root.addRoute(path, handle)
-
-	// Update maxParams
-	if paramsCount := countParams(path); paramsCount+varsCount > r.maxParams {
-		r.maxParams = paramsCount + varsCount
-	}
-
-	// Lazy-init paramsPool alloc func
-	if r.paramsPool.New == nil && r.maxParams > 0 {
-		r.paramsPool.New = func() interface{} {
-			ps := make(Params, 0, r.maxParams)
-			return &ps
-		}
-	}
 }
 
-// Handler is an adapter which allows the usage of an http.Handler as a
+// Handle is an adapter which allows the usage of an http.Handler as a
 // request handle.
-// The Params are available in the request context under ParamsKey.
-func (r *Router) Handler(method, path string, handler http.Handler) {
-	r.Handle(method, path,
-		func(w http.ResponseWriter, req *http.Request, p Params) {
-			if len(p) > 0 {
-				ctx := req.Context()
-				ctx = context.WithValue(ctx, ParamsKey, p)
-				req = req.WithContext(ctx)
-			}
-			handler.ServeHTTP(w, req)
-		},
-	)
+// Renamed to Handle to align with stdlib http.ServeMux
+func (r *Router) Handle(method, path string, handler http.Handler) {
+	r.handle(method, path, handler.ServeHTTP)
 }
 
-// HandlerFunc is an adapter which allows the usage of an http.HandlerFunc as a
+// HandleFunc	 is an adapter which allows the usage of an http.HandlerFunc as a
 // request handle.
-func (r *Router) HandlerFunc(method, path string, handler http.HandlerFunc) {
-	r.Handler(method, path, handler)
+// Renamed to HandleFunc to align with stdlib http.ServeMux
+func (r *Router) HandleFunc(method, path string, handler http.HandlerFunc) {
+	r.handle(method, path, handler)
 }
 
 // ServeFiles serves files from the given file system root.
-// The path must end with "/*filepath", files are then served from the local
-// path /defined/root/dir/*filepath.
-// For example if root is "/etc" and *filepath is "passwd", the local file
+// The path must end with "/{filepath...}", files are then served from the local
+// path /defined/root/dir/{filepath...}.
+// For example if root is "/etc" and {filepath...} is "passwd", the local file
 // "/etc/passwd" would be served.
 // Internally a http.FileServer is used, therefore http.NotFound is used instead
 // of the Router's NotFound handler.
 // To use the operating system's file system implementation,
 // use http.Dir:
-//     router.ServeFiles("/src/*filepath", http.Dir("/var/www"))
+//
+//	router.ServeFiles("/src/{filepath...}", http.Dir("/var/www"))
 func (r *Router) ServeFiles(path string, root http.FileSystem) {
-	if len(path) < 10 || path[len(path)-10:] != "/*filepath" {
-		panic("path must end with /*filepath in path '" + path + "'")
+	if len(path) < 14 || path[len(path)-14:] != "/{filepath...}" {
+		panic("path must end with /{filepath...} in path '" + path + "'")
 	}
 
 	fileServer := http.FileServer(root)
 
-	r.GET(path, func(w http.ResponseWriter, req *http.Request, ps Params) {
-		req.URL.Path = ps.ByName("filepath")
+	r.GET(path, func(w http.ResponseWriter, req *http.Request) {
+		req.URL.Path = req.PathValue("filepath")
 		fileServer.ServeHTTP(w, req)
 	})
 }
@@ -387,23 +321,19 @@ func (r *Router) recv(w http.ResponseWriter, req *http.Request) {
 }
 
 // Lookup allows the manual lookup of a method + path combo.
-// This is e.g. useful to build a framework around this router.
-// If the path was found, it returns the handle function and the path parameter
-// values. Otherwise the third return value indicates whether a redirection to
+// This is useful to build a framework around this router.
+// If the path was found, it returns the handler function.
+// Otherwise the second return value indicates whether a redirection to
 // the same path with an extra / without the trailing slash should be performed.
-func (r *Router) Lookup(method, path string) (Handle, Params, bool) {
+func (r *Router) Lookup(method, path string) (http.HandlerFunc, bool) {
 	if root := r.trees[method]; root != nil {
-		handle, ps, tsr := root.getValue(path, r.getParams)
+		handle, tsr := root.getValue(path, nil)
 		if handle == nil {
-			r.putParams(ps)
-			return nil, nil, tsr
+			return nil, tsr
 		}
-		if ps == nil {
-			return handle, nil, tsr
-		}
-		return handle, *ps, tsr
+		return handle, tsr
 	}
-	return nil, nil, false
+	return nil, false
 }
 
 func (r *Router) allowed(path, reqMethod string) (allow string) {
@@ -429,7 +359,7 @@ func (r *Router) allowed(path, reqMethod string) (allow string) {
 				continue
 			}
 
-			handle, _, _ := r.trees[method].getValue(path, nil)
+			handle, _ := r.trees[method].getValue(path, nil)
 			if handle != nil {
 				// Add request method to list of allowed methods
 				allowed = append(allowed, method)
@@ -468,13 +398,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	path := req.URL.Path
 
 	if root := r.trees[req.Method]; root != nil {
-		if handle, ps, tsr := root.getValue(path, r.getParams); handle != nil {
-			if ps != nil {
-				handle(w, req, *ps)
-				r.putParams(ps)
-			} else {
-				handle(w, req, nil)
-			}
+		if handle, tsr := root.getValue(path, req); handle != nil {
+			handle(w, req)
 			return
 		} else if req.Method != http.MethodConnect && path != "/" {
 			// Moved Permanently, request with GET method

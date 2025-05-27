@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be found
 // in the LICENSE file.
 
-package httprouter
+package httpmux
 
 import (
+	"net/http"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -30,9 +31,9 @@ func longestCommonPrefix(a, b string) int {
 // Returns -1 as index, if no wildcard was found.
 func findWildcard(path string) (wilcard string, i int, valid bool) {
 	// Find start
-	for start, c := range []byte(path) {
-		// A wildcard starts with ':' (param) or '*' (catch-all)
-		if c != ':' && c != '*' {
+	for start, c := range []uint8(path) {
+		// A wildcard starts with '{' (param) or '*' (catch-all)
+		if c != '{' {
 			continue
 		}
 
@@ -41,8 +42,13 @@ func findWildcard(path string) (wilcard string, i int, valid bool) {
 		for end, c := range []byte(path[start+1:]) {
 			switch c {
 			case '/':
-				return path[start : start+1+end], start, valid
-			case ':', '*':
+				// check if the character before is '}'
+				if end > 0 && path[start+end] == '}' {
+					return path[start : start+1+end], start, valid
+				}
+
+				valid = false
+			case '{': //not nested wildcard and need a close brace
 				valid = false
 			}
 		}
@@ -55,7 +61,7 @@ func countParams(path string) uint16 {
 	var n uint16
 	for i := range []byte(path) {
 		switch path[i] {
-		case ':', '*':
+		case '{':
 			n++
 		}
 	}
@@ -78,7 +84,7 @@ type node struct {
 	nType     nodeType
 	priority  uint32
 	children  []*node
-	handle    Handle
+	handle    http.HandlerFunc
 }
 
 // Increments priority of the given child and reorders if necessary
@@ -104,9 +110,19 @@ func (n *node) incrementChildPrio(pos int) int {
 	return newPos
 }
 
+// httprouter does not handle implicit catchalls to {$} can be treated as standard route
+func preCleanPath(path string) string {
+	if strings.Contains(path, "{$}") {
+		return strings.ReplaceAll(path, "{$}", "")
+	}
+	return path
+}
+
 // addRoute adds a node with the given handle to the path.
 // Not concurrency-safe!
-func (n *node) addRoute(path string, handle Handle) {
+func (n *node) addRoute(path string, handle http.HandlerFunc) {
+	path = preCleanPath(path)
+
 	fullPath := path
 	n.priority++
 
@@ -120,7 +136,7 @@ func (n *node) addRoute(path string, handle Handle) {
 walk:
 	for {
 		// Find the longest common prefix.
-		// This also implies that the common prefix contains no ':' or '*'
+		// This also implies that the common prefix contains no '{' or '*'
 		// since the existing key can't contain those chars.
 		i := longestCommonPrefix(path, n.path)
 
@@ -193,7 +209,7 @@ walk:
 			}
 
 			// Otherwise insert it
-			if idxc != ':' && idxc != '*' {
+			if idxc != '{' {
 				// []byte for proper unicode char conversion, see #65
 				n.indices += string([]byte{idxc})
 				child := &node{}
@@ -214,7 +230,7 @@ walk:
 	}
 }
 
-func (n *node) insertChild(path, fullPath string, handle Handle) {
+func (n *node) insertChild(path, fullPath string, handle http.HandlerFunc) {
 	for {
 		// Find prefix until first wildcard
 		wildcard, i, valid := findWildcard(path)
@@ -222,14 +238,14 @@ func (n *node) insertChild(path, fullPath string, handle Handle) {
 			break
 		}
 
-		// The wildcard name must not contain ':' and '*'
+		// The wildcard name must not contain '{' and '*'
 		if !valid {
 			panic("only one wildcard per path segment is allowed, has: '" +
 				wildcard + "' in path '" + fullPath + "'")
 		}
 
 		// Check if the wildcard has a name
-		if len(wildcard) < 2 {
+		if len(wildcard) < 3 || wildcard == "{...}" { // open and close brace are 2 characters
 			panic("wildcards must be named with a non-empty name in path '" + fullPath + "'")
 		}
 
@@ -241,7 +257,7 @@ func (n *node) insertChild(path, fullPath string, handle Handle) {
 		}
 
 		// param
-		if wildcard[0] == ':' {
+		if (len(wildcard) >= 6 && wildcard[len(wildcard)-4:] == "...}") == false { //not a catch-all
 			if i > 0 {
 				// Insert prefix before the current wildcard
 				n.path = path[:i]
@@ -323,7 +339,8 @@ func (n *node) insertChild(path, fullPath string, handle Handle) {
 // If no handle can be found, a TSR (trailing slash redirect) recommendation is
 // made if a handle exists with an extra (without the) trailing slash for the
 // given path.
-func (n *node) getValue(path string, params func() *Params) (handle Handle, ps *Params, tsr bool) {
+func (n *node) getValue(path string, req *http.Request) (handle http.HandlerFunc, tsr bool) {
+
 walk: // Outer loop for walking the tree
 	for {
 		prefix := n.path
@@ -360,18 +377,8 @@ walk: // Outer loop for walking the tree
 						end++
 					}
 
-					// Save param value
-					if params != nil {
-						if ps == nil {
-							ps = params()
-						}
-						// Expand slice within preallocated capacity
-						i := len(*ps)
-						*ps = (*ps)[:i+1]
-						(*ps)[i] = Param{
-							Key:   n.path[1:],
-							Value: path[:end],
-						}
+					if req != nil {
+						req.SetPathValue(n.path[1:len(n.path)-1], path[:end])
 					}
 
 					// We need to go deeper!
@@ -399,18 +406,8 @@ walk: // Outer loop for walking the tree
 					return
 
 				case catchAll:
-					// Save param value
-					if params != nil {
-						if ps == nil {
-							ps = params()
-						}
-						// Expand slice within preallocated capacity
-						i := len(*ps)
-						*ps = (*ps)[:i+1]
-						(*ps)[i] = Param{
-							Key:   n.path[2:],
-							Value: path,
-						}
+					if req != nil {
+						req.SetPathValue(n.path[2:len(n.path)-4], path)
 					}
 
 					handle = n.handle
