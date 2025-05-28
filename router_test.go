@@ -197,6 +197,27 @@ func TestRouterInvalidInput(t *testing.T) {
 	if recv == nil {
 		t.Fatal("registering nil handler did not panic")
 	}
+
+	recv = catchPanic(func() {
+		router.GET("/{...}", handle)
+	})
+	if recv == nil {
+		t.Fatal("registering empty catch-all route did not panic")
+	}
+
+	recv = catchPanic(func() {
+		router.GET("/{}", handle)
+	})
+	if recv == nil {
+		t.Fatal("registering emoty param did not panic")
+	}
+
+	recv = catchPanic(func() {
+		router.GET("/{{param}}", handle)
+	})
+	if recv == nil {
+		t.Fatal("registering nested param did not panic")
+	}
 }
 
 func TestRouterChaining(t *testing.T) {

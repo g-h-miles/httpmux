@@ -145,7 +145,7 @@ handler, found := router.Lookup(method, path)
 ### Configuration Options
 
 ```go
-router := httpmux.New()
+router := httpmux.NewServeMux() // or httpmux.New()
 
 // Automatic trailing slash redirects (default: true)
 router.RedirectTrailingSlash = true
