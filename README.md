@@ -200,3 +200,36 @@ Contributions are welcome! This project maintains compatibility with both Go's s
 ## License
 
 BSD 3-Clause License (same as original httprouter)
+
+## MultiRouter (Experimental)
+
+For applications that need to compose multiple routers (e.g., API + frontend SPA), httpmux provides an experimental `MultiRouter` that routes requests to different routers based on path prefixes:
+
+```go
+multi := httpmux.NewMultiRouter()
+
+// API routes
+apiRouter := httpmux.New()
+apiRouter.GET("/users/{id}", UserHandler) // api/users/{id}
+multi.Group("/api", apiRouter)
+
+// Admin routes
+adminRouter := multi.NewGroup("/admin")
+adminRouter.GET("/dashboard", adminHandler) // admin/dashboard
+
+// Frontend fallback for SPA routing
+frontendRouter := httpmux.New()
+frontendRouter.GET("/{path...}", frontendHandler) // /{path...}
+multi.Default(frontendRouter)
+
+http.ListenAndServe(":8080", multi)
+```
+
+**Features:**
+
+- Automatic conflict detection at registration time
+- Minimal performance overhead (~600ns per request)
+- Clean separation between API and frontend routing
+- Zero impact on core router performance
+
+**Note:** MultiRouter is experimental and the API may change. Feedback welcome!

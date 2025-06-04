@@ -5,6 +5,8 @@
 
 package httpmux
 
+import "strings"
+
 // CleanPath is the URL version of path.Clean, it returns a canonical URL path
 // for p, eliminating . and .. elements.
 //
@@ -147,4 +149,49 @@ func bufApp(buf *[]byte, s string, w int, c byte) {
 		copy(b, s[:w])
 	}
 	b[w] = c
+}
+
+// Remove or comment out this function
+// func addPrecedencePrefix(path string) string {
+// 	return "/$" + path
+// }
+
+// httprouter does not handle implicit catchalls to {$} can be treated as standard route
+func preCleanPath(path string) string {
+	if strings.Contains(path, "{$}") {
+		return strings.ReplaceAll(path, "{$}", "")
+	}
+	return path
+}
+
+// utility functions for getting all paths from the router
+func (r *Router) getPaths() []string {
+	var paths []string
+	for _, tree := range r.trees {
+		if tree != nil {
+			treePaths := r.findRecursiveChildren(tree, "")
+			paths = append(paths, treePaths...)
+		}
+	}
+	return paths
+}
+
+func (r *Router) findRecursiveChildren(n *node, prefix string) []string {
+	var paths []string
+
+	// Build current full path
+	currentPath := prefix + n.path
+
+	// If this node has a handler, it's a complete route
+	if n.handle != nil {
+		paths = append(paths, currentPath)
+	}
+
+	// Recursively get children paths
+	for _, child := range n.children {
+		childPaths := r.findRecursiveChildren(child, currentPath)
+		paths = append(paths, childPaths...)
+	}
+
+	return paths
 }

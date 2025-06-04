@@ -110,14 +110,6 @@ func (n *node) incrementChildPrio(pos int) int {
 	return newPos
 }
 
-// httprouter does not handle implicit catchalls to {$} can be treated as standard route
-func preCleanPath(path string) string {
-	if strings.Contains(path, "{$}") {
-		return strings.ReplaceAll(path, "{$}", "")
-	}
-	return path
-}
-
 // addRoute adds a node with the given handle to the path.
 // Not concurrency-safe!
 func (n *node) addRoute(path string, handle http.HandlerFunc) {
@@ -257,7 +249,7 @@ func (n *node) insertChild(path, fullPath string, handle http.HandlerFunc) {
 		}
 
 		// param
-		if (len(wildcard) >= 6 && wildcard[len(wildcard)-4:] == "...}") == false { //not a catch-all
+		if !(len(wildcard) >= 6 && wildcard[len(wildcard)-4:] == "...}") { //not a catch-all
 			if i > 0 {
 				// Insert prefix before the current wildcard
 				n.path = path[:i]
