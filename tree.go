@@ -174,11 +174,18 @@ walk:
 						pathSeg = strings.SplitN(pathSeg, "/", 2)[0]
 					}
 					prefix := fullPath[:strings.Index(fullPath, pathSeg)] + n.path
-					panic("'" + pathSeg +
-						"' in new path '" + fullPath +
-						"' conflicts with existing wildcard '" + n.path +
-						"' in existing prefix '" + prefix +
-						"'")
+					if n.nType == catchAll || strings.HasSuffix(n.path, "...}") {
+						panic("Route '" + fullPath + "' conflicts with existing catch-all route '" + n.path +
+							"' in prefix '" + prefix + "'.\n" +
+							"Catch-all routes cannot overlap with specific routes. " +
+							"Consider using MultiRouter for grouping, or register specific routes before catch-alls. See README for details.")
+					} else {
+						panic("'" + pathSeg +
+							"' in new path '" + fullPath +
+							"' conflicts with existing wildcard '" + n.path +
+							"' in existing prefix '" + prefix +
+							"'")
+					}
 				}
 			}
 
@@ -244,8 +251,13 @@ func (n *node) insertChild(path, fullPath string, handle http.HandlerFunc) {
 		// Check if this node has existing children which would be
 		// unreachable if we insert the wildcard here
 		if len(n.children) > 0 {
-			panic("wildcard segment '" + wildcard +
-				"' conflicts with existing children in path '" + fullPath + "'")
+			if len(wildcard) >= 6 && wildcard[len(wildcard)-4:] == "...}" {
+				panic("Catch-all route '" + wildcard + "' at '" + fullPath + "' conflicts with existing specific routes. " +
+					"Consider using MultiRouter for grouping or move specific routes before catch-all. See README for details.")
+			} else {
+				panic("wildcard segment '" + wildcard +
+					"' conflicts with existing children in path '" + fullPath + "'")
+			}
 		}
 
 		// param

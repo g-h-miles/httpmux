@@ -78,6 +78,7 @@
 package httpmux
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -464,4 +465,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	} else {
 		http.NotFound(w, req)
 	}
+}
+
+// RouteError represents a routing configuration error
+type RouteError struct {
+	Message string
+	Path    string
+	Details string
+}
+
+func (e *RouteError) Error() string {
+	return fmt.Sprintf("Route Error: %s\nPath: %s\n%s", e.Message, e.Path, e.Details)
 }
